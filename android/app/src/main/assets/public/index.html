@@ -1,0 +1,1020 @@
+<!DOCTYPE html>
+<html lang="bs">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<title>Nadstrešnica — Detekcija dronova</title>
+<script>
+  // Postavi na URL svog deploy-ovanog backend-a (npr. iz Railway/Render) da
+  // app prestane raditi u lokalnom demo režimu i počne čuvati stvarne
+  // podatke. Prazan string = app radi offline/demo (svi podaci samo u
+  // memoriji telefona, nestaju kad se app zatvori).
+  window.NADSTRESNICA_API_BASE = '';
+</script>
+<link rel="manifest" href="data:application/json,{}">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+  :root {
+    --bg: #0b0f0d;
+    --surface: #121815;
+    --surface-2: #171f1a;
+    --line: #232e28;
+    --text: #eef3ef;
+    --text-dim: #7f9488;
+    --amber: #e8a33d;
+    --amber-dim: #4a3a1c;
+    --green: #4ade95;
+    --red: #e85d5d;
+    --red-dim: #3a1e1e;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html { scroll-padding-top: env(safe-area-inset-top, 0px); }
+  html, body {
+    margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font-family: 'Space Grotesk', -apple-system, sans-serif;
+    overscroll-behavior-y: none;
+  }
+  :root { box-sizing: border-box; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+
+  #app { display: flex; flex-direction: column; height: 100%; min-height: 100vh; max-width: 480px; margin: 0 auto; position: relative; }
+
+  /* ---- Top bar ---- */
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: calc(14px + env(safe-area-inset-top, 0px)) 18px 12px;
+  }
+  .topbar-title { font-size: 17px; font-weight: 600; letter-spacing: -0.2px; }
+  .topbar-sub { font-size: 11px; color: var(--text-dim); margin-top: 1px; }
+  .status-chip {
+    display: flex; align-items: center; gap: 6px;
+    font-family: 'JetBrains Mono', monospace; font-size: 11px;
+    background: rgba(74,222,149,0.1); color: var(--green);
+    padding: 5px 10px; border-radius: 20px; border: 1px solid rgba(74,222,149,0.25);
+  }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: blink 2s infinite; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.25} }
+
+  /* ---- Radar hero ---- */
+  .radar-wrap {
+    position: relative; margin: 4px 18px 0; aspect-ratio: 1; border-radius: 20px;
+    background: radial-gradient(circle at 50% 50%, #101c15 0%, #0b0f0d 70%);
+    border: 1px solid var(--line); overflow: hidden;
+  }
+  #radar-svg { width: 100%; height: 100%; display: block; }
+  .radar-safe-badge {
+    position: absolute; top: 12px; left: 14px;
+    font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--text-dim);
+  }
+  .radar-alert-banner {
+    position: absolute; top: 0; left: 0; right: 0; padding: 10px 16px;
+    background: var(--red); color: #1a0a0a; font-weight: 600; font-size: 13px;
+    display: none; align-items: center; gap: 8px; justify-content: center;
+    animation: alertSlide 0.3s ease-out;
+  }
+  @keyframes alertSlide { from { transform: translateY(-100%); } to { transform: translateY(0); } }
+
+  /* ---- Threshold control ---- */
+  .control-card {
+    margin: 16px 18px 0; padding: 16px 18px; background: var(--surface);
+    border-radius: 16px; border: 1px solid var(--line);
+  }
+  .control-label { font-size: 13px; color: var(--text-dim); margin-bottom: 10px; display: flex; justify-content: space-between; }
+  .control-value { font-family: 'JetBrains Mono', monospace; color: var(--text); font-weight: 600; }
+  input[type=range] {
+    width: 100%; height: 4px; border-radius: 2px; background: var(--line);
+    -webkit-appearance: none; appearance: none;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 22px; height: 22px; border-radius: 50%;
+    background: var(--amber); border: 3px solid var(--bg); box-shadow: 0 0 0 1px var(--amber);
+  }
+  input[type=range]::-moz-range-thumb {
+    width: 22px; height: 22px; border-radius: 50%; background: var(--amber);
+    border: 3px solid var(--bg); box-shadow: 0 0 0 1px var(--amber);
+  }
+
+  /* ---- Contact feed ---- */
+  .section-label {
+    margin: 20px 18px 8px; font-size: 12px; color: var(--text-dim); font-weight: 500;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  #feed { flex: 1; overflow-y: auto; padding: 0 18px 100px; -webkit-overflow-scrolling: touch; }
+  .empty-state { padding: 40px 20px; text-align: center; color: var(--text-dim); font-size: 13px; line-height: 1.6; }
+
+  .contact-card {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 14px;
+    padding: 14px 16px; margin-bottom: 10px; transition: border-color 0.3s, background 0.3s;
+  }
+  .contact-card.state-warn { border-color: rgba(232,163,61,0.4); background: var(--amber-dim); }
+  .contact-card.state-danger { border-color: rgba(232,93,93,0.5); background: var(--red-dim); }
+  .cc-top { display: flex; justify-content: space-between; align-items: center; }
+  .cc-id { font-family: 'JetBrains Mono', monospace; font-weight: 600; font-size: 14px; }
+  .cc-badge {
+    font-size: 10px; font-family: 'JetBrains Mono', monospace; padding: 3px 8px;
+    border-radius: 10px; font-weight: 600;
+  }
+  .badge-clear { background: rgba(74,222,149,0.12); color: var(--green); }
+  .badge-warn { background: rgba(232,163,61,0.18); color: var(--amber); }
+  .badge-danger { background: rgba(232,93,93,0.2); color: var(--red); }
+  .cc-meta { display: flex; gap: 14px; margin-top: 8px; font-size: 12px; color: var(--text-dim); }
+  .cc-actions { margin-top: 12px; display: flex; gap: 8px; }
+  .cc-btn {
+    flex: 1; padding: 9px; border-radius: 10px; border: 1px solid var(--line);
+    background: var(--surface-2); color: var(--text); font-size: 12px; font-weight: 500;
+    font-family: inherit; cursor: pointer;
+  }
+  .cc-btn.primary { background: var(--red); color: #1a0a0a; border-color: var(--red); font-weight: 600; }
+
+  /* ---- Bottom nav ---- */
+  .bottomnav {
+    position: fixed; bottom: 0; left: 0; right: 0; max-width: 480px; margin: 0 auto;
+    display: flex; background: var(--surface); border-top: 1px solid var(--line);
+    padding: 8px 8px calc(8px + env(safe-area-inset-bottom, 0px));
+  }
+  .nav-btn {
+    flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px;
+    padding: 6px; border: none; background: none; color: var(--text-dim);
+    font-family: inherit; font-size: 10.5px; cursor: pointer;
+  }
+  .nav-btn.active { color: var(--green); }
+  .nav-icon { width: 20px; height: 20px; }
+
+  /* ---- Log / evidence view ---- */
+  .log-entry {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+    padding: 12px 14px; margin-bottom: 8px;
+  }
+  .log-time { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-dim); }
+  .log-desc { font-size: 13px; margin-top: 4px; }
+  .log-tag { display: inline-block; font-size: 10px; padding: 2px 7px; border-radius: 8px; margin-top: 6px; font-family: 'JetBrains Mono', monospace; }
+
+  .view { display: none; flex-direction: column; flex: 1; min-height: 0; }
+  .view.active { display: flex; }
+
+  .modal-backdrop {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: none;
+    align-items: flex-end; justify-content: center; z-index: 50;
+  }
+  .modal-backdrop.show { display: flex; }
+  .modal-sheet {
+    background: var(--surface); width: 100%; max-width: 480px; border-radius: 20px 20px 0 0;
+    padding: 20px 20px calc(20px + env(safe-area-inset-bottom, 0px)); max-height: 80vh; overflow-y: auto;
+  }
+  .modal-handle { width: 36px; height: 4px; background: var(--line); border-radius: 2px; margin: 0 auto 16px; }
+  .modal-title { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
+  .modal-sub { font-size: 12px; color: var(--text-dim); margin-bottom: 16px; }
+  .report-field { margin-bottom: 12px; }
+  .report-label { font-size: 11px; color: var(--text-dim); margin-bottom: 3px; }
+  .report-value { font-family: 'JetBrains Mono', monospace; font-size: 13px; background: var(--surface-2); padding: 8px 10px; border-radius: 8px; }
+  .modal-close-btn {
+    width: 100%; padding: 13px; margin-top: 8px; border-radius: 12px; border: none;
+    background: var(--surface-2); color: var(--text); font-family: inherit; font-size: 13px; font-weight: 500;
+  }
+
+  /* ---- Auth & onboarding ---- */
+  .auth-screen {
+    position: fixed; inset: 0; background: var(--bg); z-index: 100;
+    display: flex; flex-direction: column; max-width: 480px; margin: 0 auto;
+    padding: calc(40px + env(safe-area-inset-top, 0px)) 28px calc(28px + env(safe-area-inset-bottom, 0px));
+  }
+  .auth-logo { width: 56px; height: 56px; border-radius: 16px; background: linear-gradient(135deg, var(--green), #1f8a5c); margin-bottom: 20px; display:flex; align-items:center; justify-content:center; }
+  .auth-title { font-size: 26px; font-weight: 700; letter-spacing: -0.5px; margin-bottom: 6px; }
+  .auth-sub { font-size: 14px; color: var(--text-dim); margin-bottom: 32px; line-height: 1.5; }
+  .auth-field { margin-bottom: 14px; }
+  .auth-label { font-size: 12px; color: var(--text-dim); margin-bottom: 6px; display: block; }
+  .auth-input {
+    width: 100%; padding: 14px 16px; border-radius: 12px; border: 1px solid var(--line);
+    background: var(--surface); color: var(--text); font-family: inherit; font-size: 14px;
+  }
+  .auth-input:focus { outline: none; border-color: var(--green); }
+  .auth-btn-primary {
+    width: 100%; padding: 15px; border-radius: 12px; border: none; margin-top: 10px;
+    background: var(--green); color: #0b1f14; font-weight: 600; font-size: 14px; font-family: inherit;
+  }
+  .auth-btn-secondary {
+    width: 100%; padding: 13px; border-radius: 12px; border: 1px solid var(--line); margin-top: 10px;
+    background: transparent; color: var(--text); font-size: 13px; font-family: inherit;
+  }
+  .auth-switch { text-align: center; margin-top: 20px; font-size: 13px; color: var(--text-dim); }
+  .auth-switch a { color: var(--green); font-weight: 500; }
+  .auth-error { color: var(--red); font-size: 12px; margin-top: -6px; margin-bottom: 10px; display: none; }
+
+  .onboard-slide { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+  .onboard-icon { width: 88px; height: 88px; border-radius: 24px; background: var(--surface); border: 1px solid var(--line); display:flex; align-items:center; justify-content:center; margin-bottom: 28px; }
+  .onboard-title { font-size: 21px; font-weight: 700; margin-bottom: 10px; letter-spacing: -0.3px; }
+  .onboard-text { font-size: 14px; color: var(--text-dim); line-height: 1.6; max-width: 320px; }
+  .onboard-dots { display: flex; gap: 6px; justify-content: center; margin: 24px 0; }
+  .onboard-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--line); }
+  .onboard-dot.active { background: var(--green); width: 18px; border-radius: 3px; }
+
+  .profile-header { display: flex; align-items: center; gap: 14px; padding: 8px 18px 20px; }
+  .profile-avatar { width: 56px; height: 56px; border-radius: 50%; background: linear-gradient(135deg, var(--green), #1f8a5c); display:flex; align-items:center; justify-content:center; font-weight:700; font-size:20px; color:#0b1f14; flex-shrink:0; }
+  .profile-name { font-size: 17px; font-weight: 600; }
+  .profile-email { font-size: 12.5px; color: var(--text-dim); }
+  .profile-row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 14px 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; margin-bottom: 8px;
+    font-size: 13.5px;
+  }
+  .profile-row-label { display: flex; align-items: center; gap: 10px; }
+</style>
+</head>
+<body>
+
+<!-- LOGIN SCREEN -->
+<div class="auth-screen" id="screen-login">
+  <div class="auth-logo">
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#0b1f14" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/></svg>
+  </div>
+  <div class="auth-title">Nadstrešnica</div>
+  <div class="auth-sub">Prijavite se da pratite vazdušni prostor iznad vašeg prostora.</div>
+
+  <div class="auth-field">
+    <label class="auth-label">Email</label>
+    <input class="auth-input" type="email" id="login-email" placeholder="ime@primjer.com" autocomplete="email">
+  </div>
+  <div class="auth-field">
+    <label class="auth-label">Lozinka</label>
+    <input class="auth-input" type="password" id="login-password" placeholder="••••••••" autocomplete="current-password">
+  </div>
+  <div class="auth-error" id="login-error">Unesite email i lozinku.</div>
+
+  <button class="auth-btn-primary" id="login-btn">Prijavi se</button>
+  <button class="auth-btn-secondary" id="login-demo-btn">Nastavi kao gost (demo)</button>
+
+  <div class="auth-switch">Nemate nalog? <a id="go-register">Registrujte se</a></div>
+</div>
+
+<!-- REGISTER SCREEN -->
+<div class="auth-screen" id="screen-register" style="display:none;">
+  <div class="auth-logo">
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#0b1f14" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/></svg>
+  </div>
+  <div class="auth-title">Napravite nalog</div>
+  <div class="auth-sub">Potreban za povezivanje vašeg uređaja i primanje upozorenja.</div>
+
+  <div class="auth-field">
+    <label class="auth-label">Ime i prezime</label>
+    <input class="auth-input" type="text" id="reg-name" placeholder="Ime Prezime" autocomplete="name">
+  </div>
+  <div class="auth-field">
+    <label class="auth-label">Email</label>
+    <input class="auth-input" type="email" id="reg-email" placeholder="ime@primjer.com" autocomplete="email">
+  </div>
+  <div class="auth-field">
+    <label class="auth-label">Lozinka</label>
+    <input class="auth-input" type="password" id="reg-password" placeholder="Minimalno 8 karaktera" autocomplete="new-password">
+  </div>
+  <div class="auth-error" id="register-error">Popunite sva polja.</div>
+
+  <button class="auth-btn-primary" id="register-btn">Registruj se</button>
+  <div class="auth-switch">Već imate nalog? <a id="go-login">Prijavite se</a></div>
+</div>
+
+<!-- ONBOARDING -->
+<div class="auth-screen" id="screen-onboarding" style="display:none; padding-left:0; padding-right:0;">
+  <div id="onboard-slides" style="flex:1; display:flex; overflow:hidden; position:relative;">
+    <div class="onboard-slide" data-slide="0" style="padding: 0 32px;">
+      <div class="onboard-icon"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#4ade95" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></svg></div>
+      <div class="onboard-title">Znajte ko leti iznad vas</div>
+      <div class="onboard-text">Nadstrešnica otkriva dronove u blizini vašeg prostora i prepoznaje proizvođača putem Remote ID signala.</div>
+    </div>
+    <div class="onboard-slide" data-slide="1" style="padding: 0 32px; display:none;">
+      <div class="onboard-icon"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#e8a33d" stroke-width="1.6"><path d="M12 9v4M12 17h.01"/><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg></div>
+      <div class="onboard-title">Upozorenje na vrijeme</div>
+      <div class="onboard-text">Podesite koliko blizu granice vaše zone dron mora doći prije nego dobijete upozorenje — od 2 do 10 metara.</div>
+    </div>
+    <div class="onboard-slide" data-slide="2" style="padding: 0 32px; display:none;">
+      <div class="onboard-icon"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#e85d5d" stroke-width="1.6"><path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h8M8 17h5"/></svg></div>
+      <div class="onboard-title">Dokaz i dojava</div>
+      <div class="onboard-text">Svaki upad se automatski bilježi i, ako je povezano, prosljeđuje nadležnim organima — spremno za prijavu u svakom trenutku.</div>
+    </div>
+  </div>
+  <div style="padding: 0 32px;">
+    <div class="onboard-dots">
+      <div class="onboard-dot active" data-dot="0"></div>
+      <div class="onboard-dot" data-dot="1"></div>
+      <div class="onboard-dot" data-dot="2"></div>
+    </div>
+    <button class="auth-btn-primary" id="onboard-next">Dalje</button>
+  </div>
+</div>
+
+<div id="app" style="display:none;">
+  <div class="topbar">
+    <div>
+      <div class="topbar-title">Nadstrešnica</div>
+      <div class="topbar-sub">Detekcija dronova nad vašim prostorom</div>
+    </div>
+    <div class="status-chip"><span class="dot"></span>Aktivno</div>
+  </div>
+
+  <!-- HOME VIEW -->
+  <div class="view active" id="view-home" style="flex:1; min-height:0; display:flex; flex-direction:column;">
+    <div class="radar-wrap">
+      <div class="radar-alert-banner" id="alert-banner">⚠ Dron u vašoj zoni</div>
+      <div class="radar-safe-badge" id="radar-badge">RADIJUS 150m</div>
+      <svg id="radar-svg" viewBox="0 0 300 300"></svg>
+    </div>
+
+    <div class="control-card">
+      <div class="control-label">
+        <span>Prag upozorenja</span>
+        <span class="control-value" id="threshold-out">5 m</span>
+      </div>
+      <input type="range" id="threshold" min="2" max="10" value="5" step="1">
+    </div>
+
+    <div class="section-label">
+      <span>Otkriveni dronovi</span>
+      <span id="feed-count" style="font-family:'JetBrains Mono',monospace;">0</span>
+    </div>
+    <div id="feed">
+      <div class="empty-state" id="empty-feed">Nema dronova u dometu.<br>Obavijestićemo vas čim nešto uđe u vašu zonu.</div>
+    </div>
+  </div>
+
+  <!-- LOG VIEW -->
+  <div class="view" id="view-log">
+    <div class="section-label" style="margin-top:16px;"><span>Istorija i dokazi</span></div>
+    <div id="log-list" style="flex:1; overflow-y:auto; padding: 0 18px 100px;">
+      <div class="empty-state">Ovdje će se pojaviti zabilježeni upadi, spremni za izvještaj.</div>
+    </div>
+  </div>
+
+  <!-- SETTINGS VIEW -->
+  <div class="view" id="view-settings">
+    <div class="section-label" style="margin-top:16px;"><span>Podešavanja</span></div>
+    <div style="padding: 0 18px;">
+      <div class="control-card">
+        <div class="control-label"><span>Zvučni alarm</span></div>
+        <label style="display:flex; align-items:center; justify-content:space-between; font-size:13px;">
+          Uključen
+          <input type="checkbox" id="sound-toggle" checked style="width:20px; height:20px;">
+        </label>
+      </div>
+      <div class="control-card">
+        <div class="control-label"><span>Vibracija</span></div>
+        <label style="display:flex; align-items:center; justify-content:space-between; font-size:13px;">
+          Uključena
+          <input type="checkbox" id="vibrate-toggle" checked style="width:20px; height:20px;">
+        </label>
+      </div>
+      <div class="control-card">
+        <div class="control-label"><span style="color:var(--text-dim); font-size:12px; line-height:1.5;">Ova aplikacija otkriva, identifikuje i automatski obavještava nadležne organe (policija/vojska, ako je povezano) o dronovima u vašoj zoni. Ne kontroliše, ne ometa, ne prizemljuje i ne preusmjerava tuđe uređaje — svaka fizička mjera je isključivo na ovlaštenim organima.</span></div>
+      </div>
+      <button class="cc-btn" id="force-test-btn" style="width:100%; margin-top:4px;">Testiraj upozorenje (demo)</button>
+      <button class="cc-btn" id="draw-zone-btn" style="width:100%; margin-top:8px;">Nacrtaj zonu na mapi</button>
+    </div>
+  </div>
+
+  <div class="bottomnav">
+    <button class="nav-btn active" data-view="home">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></svg>
+      Radar
+    </button>
+    <button class="nav-btn" data-view="log">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h8M8 17h5"/></svg>
+      Istorija
+    </button>
+    <button class="nav-btn" data-view="settings">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06A1.65 1.65 0 004.6 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06A1.65 1.65 0 009 4.6a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+      Postavke
+    </button>
+    <button class="nav-btn" data-view="profile">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+      Profil
+    </button>
+  </div>
+  <!-- PROFILE VIEW -->
+  <div class="view" id="view-profile">
+    <div class="profile-header" style="margin-top:16px;">
+      <div class="profile-avatar" id="profile-avatar">?</div>
+      <div>
+        <div class="profile-name" id="profile-name">—</div>
+        <div class="profile-email" id="profile-email">—</div>
+      </div>
+    </div>
+    <div style="padding: 0 18px;">
+      <div class="profile-row">
+        <div class="profile-row-label">📡 Povezan uređaj</div>
+        <span style="color:var(--text-dim);">Nije povezano</span>
+      </div>
+      <div class="profile-row">
+        <div class="profile-row-label">🚓 Dojava vlastima</div>
+        <span style="color:var(--green);">Aktivno</span>
+      </div>
+      <div class="profile-row">
+        <div class="profile-row-label">📍 Zona</div>
+        <span style="color:var(--text-dim);">Radijus 150m</span>
+      </div>
+      <button class="cc-btn" id="logout-btn" style="width:100%; margin-top:16px; color:var(--red);">Odjavi se</button>
+    </div>
+  </div>
+
+</div>
+
+<div class="modal-backdrop" id="zone-modal">
+  <div class="modal-sheet" style="height:75vh; display:flex; flex-direction:column; padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));">
+    <div class="modal-handle"></div>
+    <div class="modal-title">Nacrtajte svoju zonu</div>
+    <div class="modal-sub">Kliknite/dodirnite mapu da postavite tačke oko vašeg imanja. Najmanje 3 tačke.</div>
+    <div id="zone-map" style="flex:1; border-radius:12px; overflow:hidden; min-height:200px;"></div>
+    <div style="display:flex; gap:8px; margin-top:12px;">
+      <button class="cc-btn" id="zone-undo-btn">Poništi tačku</button>
+      <button class="cc-btn" id="zone-clear-btn">Obriši sve</button>
+    </div>
+    <button class="modal-close-btn" id="zone-save-btn" style="background:var(--green); color:#0b1f14; font-weight:600; margin-top:8px;">Sačuvaj zonu</button>
+    <button class="modal-close-btn" id="zone-cancel-btn">Otkaži</button>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="report-modal">
+  <div class="modal-sheet">
+    <div class="modal-handle"></div>
+    <div class="modal-title">Izvještaj o upadu</div>
+    <div class="modal-sub">Podaci pripremljeni za prijavu nadležnom organu.</div>
+    <div id="report-body"></div>
+    <button class="modal-close-btn" id="report-share-btn" style="background:var(--red); color:#1a0a0a; font-weight:600; margin-bottom:8px;">Prijavi nadležnim vlastima</button>
+    <button class="modal-close-btn" onclick="document.getElementById('report-modal').classList.remove('show')">Zatvori</button>
+  </div>
+</div>
+
+<script>
+(function(){
+  const svgNS = "http://www.w3.org/2000/svg";
+  function el(tag, attrs){ const e = document.createElementNS(svgNS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); return e; }
+
+  // ---- Backend API layer ----
+  // Postavi na svoj deploy-ovan backend URL kad ga hostuješ (npr. Railway/Render).
+  // Dok je API_BASE prazan ili nedostupan, app radi u lokalnom demo režimu
+  // (bez perzistencije) da ne blokira testiranje bez servera.
+  const API_BASE = window.NADSTRESNICA_API_BASE || '';
+  let authToken = localStorage.getItem('nadstresnica_token') || null;
+  let offlineMode = !API_BASE;
+
+  async function apiCall(path, options = {}) {
+    if (!API_BASE) { offlineMode = true; throw new Error('offline'); }
+    try {
+      const res = await fetch(API_BASE + path, {
+        ...options,
+        headers: {
+          'Content-Type': 'application/json',
+          ...(authToken ? { Authorization: 'Bearer ' + authToken } : {}),
+          ...(options.headers || {}),
+        },
+      });
+      offlineMode = false;
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Greška servera');
+      return data;
+    } catch (e) {
+      if (e.message === 'offline' || e instanceof TypeError) offlineMode = true;
+      throw e;
+    }
+  }
+
+  function updateConnectionBadge(){
+    const chip = document.querySelector('.status-chip');
+    if (!chip) return;
+    if (offlineMode) {
+      chip.style.color = 'var(--amber)';
+      chip.style.background = 'rgba(232,163,61,0.1)';
+      chip.style.borderColor = 'rgba(232,163,61,0.3)';
+      chip.innerHTML = '<span class="dot"></span>Offline režim (demo)';
+    } else {
+      chip.style.color = 'var(--green)';
+      chip.style.background = 'rgba(74,222,149,0.1)';
+      chip.style.borderColor = 'rgba(74,222,149,0.25)';
+      chip.innerHTML = '<span class="dot"></span>Povezano';
+    }
+  }
+
+  // ---- Auth / onboarding flow ----
+  const screenLogin = document.getElementById('screen-login');
+  const screenRegister = document.getElementById('screen-register');
+  const screenOnboarding = document.getElementById('screen-onboarding');
+  const appRoot = document.getElementById('app');
+
+  function showScreen(name){
+    screenLogin.style.display = name === 'login' ? 'flex' : 'none';
+    screenRegister.style.display = name === 'register' ? 'flex' : 'none';
+    screenOnboarding.style.display = name === 'onboarding' ? 'flex' : 'none';
+    appRoot.style.display = name === 'app' ? 'flex' : 'none';
+    if (name === 'app') appRoot.style.flexDirection = 'column';
+  }
+
+  document.getElementById('go-register').addEventListener('click', () => showScreen('register'));
+  document.getElementById('go-login').addEventListener('click', () => showScreen('login'));
+  window.addEventListener('offline', () => { offlineMode = true; updateConnectionBadge(); showToastSafe('Nema internet konekcije — app radi offline.'); });
+  window.addEventListener('online', () => { offlineMode = !API_BASE; updateConnectionBadge(); });
+  function showToastSafe(msg){ if (typeof showToast === 'function') showToast(msg); }
+
+  function enterApp(user){
+    document.getElementById('profile-name').textContent = user.name || 'Gost korisnik';
+    document.getElementById('profile-email').textContent = user.email || 'gost@lokalno';
+    document.getElementById('profile-avatar').textContent = (user.name || 'G').trim()[0].toUpperCase();
+    updateConnectionBadge();
+    const seen = localStorage.getItem('nadstresnica_onboarded');
+    if (!seen) { showScreen('onboarding'); } else { showScreen('app'); startEngine(); }
+  }
+
+  function setAuthLoading(btn, loading, originalText){
+    btn.disabled = loading;
+    btn.textContent = loading ? 'Molimo sačekajte…' : originalText;
+  }
+
+  document.getElementById('login-btn').addEventListener('click', async () => {
+    const email = document.getElementById('login-email').value.trim();
+    const pass = document.getElementById('login-password').value;
+    const err = document.getElementById('login-error');
+    const btn = document.getElementById('login-btn');
+    if (!email || !pass) { err.textContent = 'Unesite email i lozinku.'; err.style.display = 'block'; return; }
+    err.style.display = 'none';
+    setAuthLoading(btn, true, 'Prijavi se');
+    try {
+      const data = await apiCall('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password: pass }) });
+      authToken = data.token;
+      localStorage.setItem('nadstresnica_token', authToken);
+      enterApp(data.user);
+    } catch (e) {
+      if (offlineMode) {
+        // Nema veze sa serverom — nastavi u lokalnom demo režimu da testiranje nije blokirano
+        enterApp({ name: email.split('@')[0], email });
+      } else {
+        err.textContent = e.message || 'Prijava nije uspjela.';
+        err.style.display = 'block';
+      }
+    } finally {
+      setAuthLoading(btn, false, 'Prijavi se');
+    }
+  });
+
+  document.getElementById('login-demo-btn').addEventListener('click', () => {
+    authToken = null;
+    localStorage.removeItem('nadstresnica_token');
+    offlineMode = true;
+    enterApp({ name: 'Gost korisnik', email: 'gost@lokalno' });
+  });
+
+  document.getElementById('register-btn').addEventListener('click', async () => {
+    const name = document.getElementById('reg-name').value.trim();
+    const email = document.getElementById('reg-email').value.trim();
+    const pass = document.getElementById('reg-password').value;
+    const err = document.getElementById('register-error');
+    const btn = document.getElementById('register-btn');
+    if (!name || !email || pass.length < 8) { err.textContent = 'Popunite sva polja (lozinka min. 8 karaktera).'; err.style.display = 'block'; return; }
+    err.style.display = 'none';
+    setAuthLoading(btn, true, 'Registruj se');
+    try {
+      const data = await apiCall('/api/auth/register', { method: 'POST', body: JSON.stringify({ name, email, password: pass }) });
+      authToken = data.token;
+      localStorage.setItem('nadstresnica_token', authToken);
+      enterApp(data.user);
+    } catch (e) {
+      if (offlineMode) {
+        enterApp({ name, email });
+      } else {
+        err.textContent = e.message || 'Registracija nije uspjela.';
+        err.style.display = 'block';
+      }
+    } finally {
+      setAuthLoading(btn, false, 'Registruj se');
+    }
+  });
+
+  document.getElementById('logout-btn').addEventListener('click', () => {
+    localStorage.removeItem('nadstresnica_token');
+    location.reload();
+  });
+
+  // Onboarding slider
+  let slideIndex = 0;
+  const slides = document.querySelectorAll('.onboard-slide');
+  const dots = document.querySelectorAll('.onboard-dot');
+  document.getElementById('onboard-next').addEventListener('click', () => {
+    slides[slideIndex].style.display = 'none';
+    dots[slideIndex].classList.remove('active');
+    slideIndex++;
+    if (slideIndex >= slides.length) {
+      localStorage.setItem('nadstresnica_onboarded', '1');
+      showScreen('app');
+      startEngine();
+      return;
+    }
+    slides[slideIndex].style.display = 'flex';
+    dots[slideIndex].classList.add('active');
+    document.getElementById('onboard-next').textContent = slideIndex === slides.length - 1 ? 'Počni koristiti' : 'Dalje';
+  });
+
+  let engineStarted = false;
+  function startEngine(){
+    if (engineStarted) return;
+    engineStarted = true;
+    initDroneEngine();
+  }
+
+  // ---- Navigation ----
+  const views = { home: document.getElementById('view-home'), log: document.getElementById('view-log'), settings: document.getElementById('view-settings'), profile: document.getElementById('view-profile') };
+  document.querySelectorAll('.nav-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      Object.values(views).forEach(v => v.classList.remove('active'));
+      views[btn.dataset.view].classList.add('active');
+    });
+  });
+
+  // ---- Radar setup ----
+  function initDroneEngine(){
+  initGeolocation();
+  const radar = document.getElementById('radar-svg');
+  const cx = 150, cy = 150, maxR = 130;
+  [1, 0.66, 0.33].forEach(f => radar.appendChild(el('circle', { cx, cy, r: maxR*f, fill:'none', stroke:'#1c2621', 'stroke-width':1 })));
+  radar.appendChild(el('circle', { cx, cy, r: 3.5, fill:'#4ade95' }));
+  const barrierRing = el('circle', { cx, cy, r: maxR, fill:'rgba(232,163,61,0.05)', stroke:'#e8a33d', 'stroke-width':1.5, 'stroke-dasharray':'4 4' });
+  radar.appendChild(barrierRing);
+  const sweep = el('line', { x1:cx, y1:cy, x2:cx, y2:cy-maxR, stroke:'#4ade95', 'stroke-width':1, opacity:0.4 });
+  radar.appendChild(sweep);
+  const contactsLayer = el('g', {});
+  radar.appendChild(contactsLayer);
+
+  const RADIUS_M = 150;
+  let threshold = 5;
+  const thresholdSlider = document.getElementById('threshold');
+  const thresholdOut = document.getElementById('threshold-out');
+  function updateBarrier(){
+    const r = maxR * (1 - threshold / RADIUS_M);
+    barrierRing.setAttribute('r', r);
+  }
+  thresholdSlider.addEventListener('input', () => {
+    threshold = parseInt(thresholdSlider.value, 10);
+    thresholdOut.textContent = threshold + ' m';
+    updateBarrier();
+  });
+  updateBarrier();
+  document.getElementById('radar-badge').textContent = 'RADIJUS ' + RADIUS_M + 'm';
+
+  // ---- State ----
+  let contacts = {};
+  let seq = 1;
+  let logEntries = [];
+  const alertBanner = document.getElementById('alert-banner');
+  const feedEl = document.getElementById('feed');
+  const emptyFeed = document.getElementById('empty-feed');
+  const feedCount = document.getElementById('feed-count');
+  const logList = document.getElementById('log-list');
+
+  function vibrate(pattern){
+    if (document.getElementById('vibrate-toggle').checked && navigator.vibrate) navigator.vibrate(pattern);
+  }
+  function beep(){
+    if (!document.getElementById('sound-toggle').checked) return;
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const o = ctx.createOscillator(); const g = ctx.createGain();
+      o.connect(g); g.connect(ctx.destination);
+      o.frequency.value = 880; g.gain.value = 0.05;
+      o.start(); setTimeout(() => { o.stop(); ctx.close(); }, 180);
+    } catch(e){}
+  }
+
+  const DRONE_TYPES = [
+    { manufacturer: 'DJI', model: 'Mavic 3', hasId: true, remoteId: 'FA3XCAT' + Math.floor(Math.random()*99999) },
+    { manufacturer: 'DJI', model: 'Mini 4 Pro', hasId: true, remoteId: 'FA3XCAT' + Math.floor(Math.random()*99999) },
+    { manufacturer: 'Autel', model: 'EVO II', hasId: true, remoteId: 'AT' + Math.floor(Math.random()*999999) },
+    { manufacturer: 'Nepoznato', model: 'Nepoznat model', hasId: false, remoteId: null },
+  ];
+
+  function spawnContact(forced){
+    if (Object.keys(contacts).length >= 3 && !forced) return;
+    const id = 'DR-' + String(seq++).padStart(3,'0');
+    const type = DRONE_TYPES[Math.floor(Math.random()*DRONE_TYPES.length)];
+    const angle = Math.random() * Math.PI * 2;
+    const c = {
+      id, angle, type,
+      dist: forced ? (threshold/RADIUS_M + 0.05) : (0.6 + Math.random()*0.4),
+      speed: forced ? 0.02 : (0.008 + Math.random()*0.015),
+      inbound: true,
+      altitude: Math.round(30 + Math.random()*80),
+      state: 'clear',
+      firstSeen: new Date(),
+      warnedAt: null,
+    };
+    contacts[id] = c;
+    renderFeed();
+  }
+
+  function tick(){
+    const angleNow = (Date.now()/20) % 360 * Math.PI/180;
+    sweep.setAttribute('x2', cx + maxR*Math.cos(angleNow - Math.PI/2));
+    sweep.setAttribute('y2', cy + maxR*Math.sin(angleNow - Math.PI/2));
+
+    let anyAlert = false;
+    Object.values(contacts).forEach(c => {
+      if (c.inbound) c.dist -= c.speed * 0.3;
+      if (c.dist <= 0.06) c.inbound = false;
+
+      const metersFromEdge = (1 - c.dist) * RADIUS_M;
+      if (metersFromEdge <= threshold && metersFromEdge >= 0 && c.state === 'clear') {
+        c.state = 'warn';
+        c.warnedAt = Date.now();
+        vibrate([80,60,80]);
+        beep();
+      } else if (c.state === 'warn' && Date.now() - c.warnedAt > 3000) {
+        c.state = 'danger';
+        logIntrusion(c);
+        notifyAuthorities(c);
+        vibrate([150,80,150,80,150]);
+        beep();
+      }
+      if (c.state === 'warn' || c.state === 'danger') anyAlert = true;
+
+      if (c.dist > 1.05) delete contacts[c.id];
+    });
+
+    alertBanner.style.display = anyAlert ? 'flex' : 'none';
+    drawContacts();
+  }
+
+  function drawContacts(){
+    contactsLayer.innerHTML = '';
+    Object.values(contacts).forEach(c => {
+      const r = c.dist * maxR;
+      const x = cx + r*Math.cos(c.angle);
+      const y = cy + r*Math.sin(c.angle);
+      const color = c.state === 'danger' ? '#e85d5d' : c.state === 'warn' ? '#e8a33d' : '#4ade95';
+      contactsLayer.appendChild(el('circle', { cx:x, cy:y, r:10, fill:'none', stroke:color, 'stroke-width':1, opacity:0.4 }));
+      contactsLayer.appendChild(el('circle', { cx:x, cy:y, r:4, fill:color }));
+    });
+  }
+
+  function renderFeed(){
+    const items = Object.values(contacts);
+    feedCount.textContent = items.length;
+    if (items.length === 0){
+      feedEl.innerHTML = '';
+      feedEl.appendChild(emptyFeed);
+      return;
+    }
+    feedEl.innerHTML = '';
+    items.sort((a,b) => a.dist - b.dist).forEach(c => {
+      const div = document.createElement('div');
+      div.className = 'contact-card ' + (c.state === 'warn' ? 'state-warn' : c.state === 'danger' ? 'state-danger' : '');
+      const badge = c.state === 'danger' ? '<span class="cc-badge badge-danger">U ZONI</span>' :
+                    c.state === 'warn' ? '<span class="cc-badge badge-warn">PRIBLIŽAVA SE</span>' :
+                    '<span class="cc-badge badge-clear">PRAĆENJE</span>';
+      div.innerHTML = `
+        <div class="cc-top">
+          <span class="cc-id">${c.id}</span>
+          ${badge}
+        </div>
+        <div class="cc-meta">
+          <span>${c.type.manufacturer} ${c.type.model}</span>
+          <span>Alt ${c.altitude}m</span>
+          <span>${Math.round((1-c.dist)*RADIUS_M)}m do granice</span>
+        </div>
+        ${c.state === 'danger' ? `<div class="cc-actions"><button class="cc-btn primary" data-report="${c.id}">Vidi izvještaj</button></div>` : ''}
+      `;
+      feedEl.appendChild(div);
+    });
+    feedEl.querySelectorAll('[data-report]').forEach(btn => {
+      btn.addEventListener('click', () => showReport(btn.dataset.report));
+    });
+  }
+
+  // ---- Prava GPS lokacija ----
+  let userLocation = null; // { lat, lng }
+  let locationError = null;
+  function initGeolocation(){
+    if (!navigator.geolocation) { locationError = 'GPS nije podržan na ovom uređaju.'; return; }
+    navigator.geolocation.watchPosition(
+      (pos) => {
+        userLocation = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        locationError = null;
+        updateLocationBadge();
+      },
+      (err) => {
+        locationError = err.code === err.PERMISSION_DENIED
+          ? 'Pristup lokaciji odbijen. Bez GPS-a, zona se ne može precizno pratiti.'
+          : 'Lokacija trenutno nedostupna.';
+        updateLocationBadge();
+      },
+      { enableHighAccuracy: true, maximumAge: 10000, timeout: 15000 }
+    );
+  }
+  function updateLocationBadge(){
+    const badge = document.getElementById('radar-badge');
+    if (!badge) return;
+    if (userLocation) {
+      badge.textContent = `RADIJUS ${RADIUS_M}m · GPS ${userLocation.lat.toFixed(4)}, ${userLocation.lng.toFixed(4)}`;
+    } else if (locationError) {
+      badge.textContent = 'RADIJUS ' + RADIUS_M + 'm · ' + locationError;
+    }
+  }
+
+  function logIntrusion(c){
+    const entry = {
+      id: c.id, time: new Date(), manufacturer: c.type.manufacturer, model: c.type.manufacturer + ' ' + c.type.model,
+      remoteId: c.type.remoteId, altitude: c.altitude, reported: false, authoritiesNotified: false,
+      latitude: userLocation ? userLocation.lat : null, longitude: userLocation ? userLocation.lng : null,
+    };
+    logEntries.unshift(entry);
+    c.logRef = entry;
+    renderLog();
+
+    // Pošalji na backend ako je dostupan; ako nije, ostaje samo lokalno (offline demo)
+    apiCall('/api/detections/intrusions', {
+      method: 'POST',
+      body: JSON.stringify({
+        contact_label: entry.id, manufacturer: entry.manufacturer, model: entry.model,
+        remote_id: entry.remoteId, altitude_m: entry.altitude,
+        latitude: entry.latitude, longitude: entry.longitude,
+      }),
+    }).then(res => { entry.backendId = res.id; updateConnectionBadge(); })
+      .catch(() => { updateConnectionBadge(); });
+  }
+
+  function notifyAuthorities(c){
+    // Simulates an automatic dispatch to a connected police/military monitoring
+    // endpoint. This sends identification + location data only — it never
+    // issues any command to the drone itself.
+    const entry = c.logRef;
+    if (!entry) return;
+    setTimeout(() => {
+      entry.authoritiesNotified = true;
+      renderLog();
+      showToast(`Vlasti automatski obaviještene — ${entry.id} (${entry.manufacturer})`);
+      if (entry.backendId) {
+        apiCall(`/api/detections/intrusions/${entry.backendId}/notify-authorities`, { method: 'POST' }).catch(() => {});
+      }
+    }, 1200);
+  }
+
+  function showToast(msg){
+    let t = document.getElementById('toast');
+    if (!t) {
+      t = document.createElement('div');
+      t.id = 'toast';
+      t.style.cssText = 'position:fixed; bottom:80px; left:50%; transform:translateX(-50%); background:#171f1a; border:1px solid #232e28; color:#eef3ef; padding:10px 16px; border-radius:12px; font-size:12.5px; z-index:60; max-width:90%; text-align:center; box-shadow:0 4px 20px rgba(0,0,0,0.4);';
+      document.body.appendChild(t);
+    }
+    t.textContent = msg;
+    t.style.opacity = '1';
+    clearTimeout(t._hideTimer);
+    t._hideTimer = setTimeout(() => { t.style.transition = 'opacity 0.4s'; t.style.opacity = '0'; }, 3000);
+  }
+
+  function renderLog(){
+    if (logEntries.length === 0){
+      logList.innerHTML = '<div class="empty-state">Ovdje će se pojaviti zabilježeni upadi, spremni za izvještaj.</div>';
+      return;
+    }
+    logList.innerHTML = '';
+    logEntries.forEach(e => {
+      const div = document.createElement('div');
+      div.className = 'log-entry';
+      div.innerHTML = `
+        <div class="log-time">${e.time.toLocaleString('bs-BA')}</div>
+        <div class="log-desc">${e.id} — ${e.model} ušao u zonu upozorenja</div>
+        <div style="display:flex; gap:6px; margin-top:6px; flex-wrap:wrap;">
+          <span class="log-tag" style="background:${e.authoritiesNotified ? 'rgba(74,222,149,0.15)' : 'rgba(232,163,61,0.15)'}; color:${e.authoritiesNotified ? '#4ade95' : '#e8a33d'};">${e.authoritiesNotified ? 'VLASTI OBAVIJEŠTENE' : 'DOJAVA U TOKU...'}</span>
+          ${e.reported ? '<span class="log-tag" style="background:rgba(74,222,149,0.15); color:#4ade95;">IZVJEŠTAJ POSLAT</span>' : ''}
+        </div>
+      `;
+      div.addEventListener('click', () => showReport(e.id, e));
+      logList.appendChild(div);
+    });
+  }
+
+  function showReport(id, entryArg){
+    const entry = entryArg || logEntries.find(e => e.id === id) || {
+      id, time: new Date(), model: (contacts[id]||{}).type ? (contacts[id].type.manufacturer + ' ' + contacts[id].type.model) : 'Nepoznato',
+      remoteId: (contacts[id]||{}).type?.remoteId, altitude: (contacts[id]||{}).altitude || '—', reported: false, authoritiesNotified: false
+    };
+    const body = document.getElementById('report-body');
+    body.innerHTML = `
+      <div class="report-field"><div class="report-label">Vrijeme upada</div><div class="report-value">${entry.time.toLocaleString('bs-BA')}</div></div>
+      <div class="report-field"><div class="report-label">Oznaka kontakta</div><div class="report-value">${entry.id}</div></div>
+      <div class="report-field"><div class="report-label">Model drona</div><div class="report-value">${entry.model}</div></div>
+      <div class="report-field"><div class="report-label">Remote ID</div><div class="report-value">${entry.remoteId || 'Nije emitovan (anoniman signal)'}</div></div>
+      <div class="report-field"><div class="report-label">Visina leta</div><div class="report-value">${entry.altitude} m</div></div>
+      <div class="report-field"><div class="report-label">Prag upozorenja</div><div class="report-value">${threshold} m od granice zone</div></div>
+      <div class="report-field"><div class="report-label">Status dojave vlastima</div><div class="report-value">${entry.authoritiesNotified ? 'Automatski poslano' : 'U toku...'}</div></div>
+    `;
+    document.getElementById('report-modal').classList.add('show');
+    document.getElementById('report-share-btn').onclick = () => shareReport(entry);
+  }
+
+  function shareReport(entry){
+    const text = `IZVJEŠTAJ O UPADU DRONA
+Vrijeme: ${entry.time.toLocaleString('bs-BA')}
+Oznaka: ${entry.id}
+Proizvođač/model: ${entry.model}
+Remote ID: ${entry.remoteId || 'Nije emitovan (anoniman signal)'}
+Visina leta: ${entry.altitude} m
+Prag upozorenja: ${threshold} m od granice zone
+Lokacija: [GPS lokacija korisnika]
+---
+Generisano aplikacijom Nadstrešnica — automatska detekcija, bez kontrole nad uređajem.`;
+
+    if (navigator.share) {
+      navigator.share({ title: 'Izvještaj o upadu drona', text }).catch(()=>{});
+    } else {
+      const mailto = 'mailto:?subject=' + encodeURIComponent('Izvještaj o upadu drona — ' + entry.id) + '&body=' + encodeURIComponent(text);
+      window.location.href = mailto;
+    }
+    entry.reported = true;
+    renderLog();
+  }
+
+  document.getElementById('force-test-btn').addEventListener('click', () => {
+    spawnContact(true);
+    document.querySelector('[data-view="home"]').click();
+  });
+
+  // ---- Crtanje zone na mapi (Leaflet) ----
+  let zoneMap = null;
+  let zonePoints = [];
+  let zonePolygon = null;
+  let zoneMarkers = [];
+
+  function openZoneModal(){
+    document.getElementById('zone-modal').classList.add('show');
+    const center = userLocation ? [userLocation.lat, userLocation.lng] : [43.8563, 18.4131]; // Sarajevo fallback
+    setTimeout(() => {
+      if (!zoneMap) {
+        zoneMap = L.map('zone-map').setView(center, 17);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          attribution: '© OpenStreetMap doprinosioci', maxZoom: 19,
+        }).addTo(zoneMap);
+        zoneMap.on('click', (e) => {
+          zonePoints.push([e.latlng.lat, e.latlng.lng]);
+          const marker = L.circleMarker(e.latlng, { radius: 6, color: '#e8a33d', fillColor: '#e8a33d', fillOpacity: 1 }).addTo(zoneMap);
+          zoneMarkers.push(marker);
+          redrawZonePolygon();
+        });
+        const saved = localStorage.getItem('nadstresnica_zone');
+        if (saved) {
+          try {
+            zonePoints = JSON.parse(saved);
+            zonePoints.forEach(p => {
+              const marker = L.circleMarker(p, { radius: 6, color: '#e8a33d', fillColor: '#e8a33d', fillOpacity: 1 }).addTo(zoneMap);
+              zoneMarkers.push(marker);
+            });
+            redrawZonePolygon();
+            if (zonePoints.length) zoneMap.fitBounds(L.polygon(zonePoints).getBounds(), { padding: [30,30] });
+          } catch(e){}
+        }
+      } else {
+        zoneMap.invalidateSize();
+      }
+      if (userLocation) L.marker(center, { title: 'Vaša lokacija' }).addTo(zoneMap);
+    }, 100);
+  }
+
+  function redrawZonePolygon(){
+    if (zonePolygon) zoneMap.removeLayer(zonePolygon);
+    if (zonePoints.length >= 3) {
+      zonePolygon = L.polygon(zonePoints, { color: '#e8a33d', fillOpacity: 0.15 }).addTo(zoneMap);
+    }
+  }
+
+  document.getElementById('draw-zone-btn').addEventListener('click', openZoneModal);
+  document.getElementById('zone-cancel-btn').addEventListener('click', () => document.getElementById('zone-modal').classList.remove('show'));
+
+  document.getElementById('zone-undo-btn').addEventListener('click', () => {
+    zonePoints.pop();
+    const m = zoneMarkers.pop();
+    if (m) zoneMap.removeLayer(m);
+    redrawZonePolygon();
+  });
+
+  document.getElementById('zone-clear-btn').addEventListener('click', () => {
+    zonePoints = [];
+    zoneMarkers.forEach(m => zoneMap.removeLayer(m));
+    zoneMarkers = [];
+    if (zonePolygon) { zoneMap.removeLayer(zonePolygon); zonePolygon = null; }
+  });
+
+  document.getElementById('zone-save-btn').addEventListener('click', () => {
+    if (zonePoints.length < 3) {
+      showToast('Potrebno je najmanje 3 tačke za zonu.');
+      return;
+    }
+    localStorage.setItem('nadstresnica_zone', JSON.stringify(zonePoints));
+    document.getElementById('zone-modal').classList.remove('show');
+    showToast('Zona sačuvana — ' + zonePoints.length + ' tačaka.');
+  });
+
+  spawnContact();
+  setInterval(tick, 100);
+  setInterval(() => { if (Math.random() < 0.3) spawnContact(); }, 6000);
+  } // end initDroneEngine
+})();
+</script>
+</body>
+</html>

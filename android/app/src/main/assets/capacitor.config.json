@@ -1,0 +1,6 @@
+{
+	"appId": "com.nadstresnica.app",
+	"appName": "Nadstrešnica",
+	"webDir": "www",
+	"bundledWebRuntime": false
+}
